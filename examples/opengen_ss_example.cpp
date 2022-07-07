@@ -22,9 +22,8 @@ using gentl::UpdateOptions;
 // *** Model implementation ***
 // ****************************
 
-constexpr size_t latent_dimension = 2;
-typedef Eigen::Vector<double, latent_dimension> mean_t;
-typedef Eigen::Matrix<double, latent_dimension, latent_dimension> cov_t;
+typedef double mean_t;
+typedef double cov_t;
 
 // Selection types
 
@@ -34,14 +33,7 @@ class LatentsSelection {};
 
 class EmptyChoiceBuffer {};
 
-typedef Eigen::Array<double, latent_dimension, 1> latent_choices_t;
-
-// model change types
-
-struct ModelChange {
-  mean_t new_mean;
-  cov_t new_cov;
-};
+typedef Eigen::Array<double, 1, 1> latent_choices_t;
 
 // return value change types
 
@@ -59,12 +51,8 @@ class Model {
   friend class Trace;
 
 private:
-  typedef Eigen::LLT<Eigen::Matrix<double, latent_dimension, latent_dimension>>
-      Chol;
   mean_t mean_;
   cov_t cov_;
-  cov_t precision_;
-  Chol chol_;
 
 public:
   template <typename RNGType>
@@ -72,17 +60,9 @@ public:
     static std::normal_distribution<double> standard_normal_dist(0.0, 1.0);
     for (auto &x : latents)
       x = standard_normal_dist(rng);
-    latents = (mean_ + (chol_.matrixL() * latents.matrix())).array();
   }
 
-  [[nodiscard]] double logpdf(const latent_choices_t &latents) const {
-    static double logSqrt2Pi = 0.5 * std::log(2 * M_PI);
-    double quadform =
-        chol_.matrixL().solve(latents.matrix() - mean_).squaredNorm();
-    return std::exp(-static_cast<double>(latent_dimension) * logSqrt2Pi -
-                    0.5 * quadform) /
-           chol_.matrixL().determinant();
-  }
+  [[nodiscard]] double logpdf(const latent_choices_t &latents) const {}
 
   template <typename RNGType>
   [[nodiscard]] std::pair<double, double>
@@ -92,20 +72,7 @@ public:
     return {logpdf(latents), log_weight};
   }
 
-  void logpdf_grad(latent_choices_t &latent_gradient,
-                   const latent_choices_t &latents) const {
-    // gradient wrt value x is -x
-    latent_gradient = (-precision_ * (latents.matrix() - mean_)).array();
-  }
-
 public:
-  Model(mean_t mean, cov_t cov)
-      : mean_{std::move(mean)}, cov_{std::move(cov)}, chol_{cov},
-        precision_{cov.inverse()} {
-    if (chol_.info() != Eigen::Success)
-      throw std::logic_error("decomposition failed!");
-  }
-
   // simulate into a new trace object
   template <typename RNGType>
   std::unique_ptr<Trace> simulate(RNGType &rng, Parameters &parameters,
@@ -326,7 +293,124 @@ double Trace::update(RNG &, const gentl::change::NoChange &,
   return log_weight;
 }
 
-// TODO add implementation of update that accepts a change to the model
+// ****************************
+// *** Proposal implementation ***
+// ****************************
+
+typedef double lower_bound_t;
+typedef double upper_bound_t;
+
+typedef Eigen::Array<double, 1, 1> proposal_latent_choices_t;
+
+class ProposalParameters {
+  double d;
+}
+
+class Proposal {
+  typedef int return_type;
+  friend class ProposalTrace;
+
+private:
+  lower_bound_t lower_bound;
+  upper_bound_t upper_bound;
+
+public:
+  template <typename RNGType>
+  void exact_sample(latent_choices_t &model_choices, double d,
+                    proposal_latent_choices_t &latent_choices,
+                    RNGType &rng) const {
+    auto current = *model_choices;
+    static std::uniform_real_distribution<double> uniform_real_dist(
+        current - d, current + d);
+    for (auto &x : latents)
+      x = uniform_real_dist(rng);
+  }
+
+  [[nodiscard]] double logpdf(const proposal_latent_choices_t &latents) const {}
+
+  template <typename RNGType>
+  [[nodiscard]] std::pair<double, double>
+  importance_sample(proposal_latent_choices_t &latents, RNGType &rng) const {
+    exact_sample(latents, rng);
+    double log_weight = 0.0;
+    return {logpdf(latents), log_weight};
+  }
+
+public:
+  // simulate into a new trace object
+  template <typename RNGType>
+  std::unique_ptr<ProposalTrace> simulate(RNGType &rng,
+                                          ProposalParameters &parameters,
+                                          const SimulateOptions &) const;
+
+  // equivalent to generate but without returning a trace
+  template <typename RNG>
+  std::pair<int, double>
+  assess(RNG &, ProposalParameters &,
+         const proposal_latent_choices_t &constraints) const;
+
+  template <typename RNG>
+  std::pair<int, double> assess(RNG &, ProposalParameters &,
+                                const EmptyChoiceBuffer &constraints) const;
+};
+
+class ProposalTrace {
+  friend class Proposal;
+
+private:
+  Proposal proposal_;
+  ProposalParameters parameters;
+  double score_;
+  latent_choices_t latents_;
+
+private:
+  // initialize trace without precomputed gradient
+  Trace(Proposal proposal, ProposalParameters parameters, double score,
+        proposal_latent_choices_t &&latents)
+      : proposal_{std::move(model)},
+        parameters_{std::move(parameters)}, score_{score}, latents_{latents} {}
+
+public:
+  Trace() = delete;
+  Trace(const Trace &other) = delete;
+  Trace(Trace &&other) = delete;
+  Trace &operator=(const Trace &other) = delete;
+  Trace &operator=(Trace &&other) noexcept = delete;
+
+  [[nodiscard]] double score() const;
+  [[nodiscard]] const proposal_latent_choices_t &choices() const;
+  [[nodiscard]] const proposal_latent_choices_t &
+  choices(const LatentsSelection &selection) const;
+
+  const proposal_latent_choices_t &backward_constraints();
+
+  void revert();
+};
+
+template <typename RNGType>
+std::unique_ptr<ProposalTrace>
+Proposal::simulate(RNGType &rng, ProposalParameters &parameters,
+                   const SimulateOptions &options) const {
+  proposal_latent_choices_t latents;
+  exact_sample(latents, rng);
+  auto log_density = logpdf(latents);
+  return std::unique_ptr<ProposalTrace>(
+      new ProposalTrace(*this, log_density, std::move(latents)));
+}
+
+template <typename RNG>
+std::pair<int, double>
+Proposal::assess(RNG &, ProposalParameters &parameters,
+                 const proposal_latent_choices_t &constraints) const {
+  return {-1, logpdf(constraints)};
+}
+
+template <typename RNG>
+std::pair<int, double>
+Proposal::assess(RNG &, ProposalParameters &parameters,
+                 const EmptyChoiceBuffer &constraints) const {
+  return {-1, 0.0};
+}
 
 // *********************
 // *** Example usage ***
@@ -387,7 +471,6 @@ int main(int argc, char *argv[]) {
   cerr << "seed: " << seed << endl;
 
   // initialize RNG
-
   gentl::randutils::seed_seq_fe128 seed_seq{seed};
   std::mt19937 rng(seed_seq);
 
