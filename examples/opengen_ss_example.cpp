@@ -3,16 +3,14 @@
 #include <gentl/util/randutils.h>
 
 #include <array>
+#include <chrono>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
-#include <Eigen/Dense>
-
-// TODO support parameters
-// TODO support subset of addresses
+using namespace std::chrono;
 
 using gentl::GenerateOptions;
 using gentl::SimulateOptions;
@@ -22,8 +20,8 @@ using gentl::UpdateOptions;
 // *** Model implementation ***
 // ****************************
 
-typedef double mean_t;
-typedef double cov_t;
+typedef float mean_t;
+typedef float cov_t;
 
 // Selection types
 
@@ -33,7 +31,7 @@ class LatentsSelection {};
 
 class EmptyChoiceBuffer {};
 
-typedef Eigen::Array<double, 1, 1> latent_choices_t;
+typedef float latent_choices_t;
 
 // return value change types
 
@@ -41,14 +39,15 @@ class RetvalChange {};
 
 // learnable parameters
 
-class Parameters {};
 class GradientAccumulator {};
 
-class Trace;
+class ModelTrace;
+
+class ModelParameters {};
 
 class Model {
   typedef int return_type;
-  friend class Trace;
+  friend class ModelTrace;
 
 private:
   mean_t mean_;
@@ -57,96 +56,90 @@ private:
 public:
   template <typename RNGType>
   void exact_sample(latent_choices_t &latents, RNGType &rng) const {
-    static std::normal_distribution<double> standard_normal_dist(0.0, 1.0);
-    for (auto &x : latents)
-      x = standard_normal_dist(rng);
+    static std::normal_distribution<float> standard_normal_dist(0.0, 1.0);
+    latents = standard_normal_dist(rng);
   }
 
-  [[nodiscard]] double logpdf(const latent_choices_t &latents) const {}
+  [[nodiscard]] float logpdf(const latent_choices_t &latents) const {}
 
   template <typename RNGType>
-  [[nodiscard]] std::pair<double, double>
+  [[nodiscard]] std::pair<float, float>
   importance_sample(latent_choices_t &latents, RNGType &rng) const {
     exact_sample(latents, rng);
-    double log_weight = 0.0;
+    float log_weight = 0.0;
     return {logpdf(latents), log_weight};
   }
 
 public:
+  Model(mean_t mean, cov_t cov)
+      : mean_{std::move(mean)}, cov_{std::move(cov)} {}
+
   // simulate into a new trace object
   template <typename RNGType>
-  std::unique_ptr<Trace> simulate(RNGType &rng, Parameters &parameters,
-                                  const SimulateOptions &) const;
+  std::unique_ptr<ModelTrace> simulate(RNGType &rng,
+                                       ModelParameters &parameters,
+                                       const SimulateOptions &) const;
 
   // simulate into an existing trace object (overwriting existing contents)
   template <typename RNGType>
-  void simulate(RNGType &rng, Parameters &parameters, const SimulateOptions &,
-                Trace &trace) const;
+  void simulate(RNGType &rng, ModelParameters &parameters,
+                const SimulateOptions &, ModelTrace &trace) const;
 
   // generate into a new trace object
   template <typename RNGType>
-  std::pair<std::unique_ptr<Trace>, double>
+  std::pair<std::unique_ptr<ModelTrace>, float>
   generate(const EmptyChoiceBuffer &constraints, RNGType &rng,
-           Parameters &parameters, const GenerateOptions &) const;
+           ModelParameters &parameters, const GenerateOptions &) const;
 
   // generate into an existing trace object (overwriting existing contents)
   template <typename RNGType>
-  double generate(Trace &trace, const EmptyChoiceBuffer &constraints,
-                  RNGType &rng, Parameters &parameters,
-                  const GenerateOptions &) const;
+  float generate(ModelTrace &trace, const EmptyChoiceBuffer &constraints,
+                 RNGType &rng, ModelParameters &parameters,
+                 const GenerateOptions &) const;
 
   // equivalent to generate but without returning a trace
+  template <typename RNG>
+  std::pair<int, float> assess(RNG &, ModelParameters &,
+                               const latent_choices_t &constraints) const;
 
   template <typename RNG>
-  std::pair<int, double> assess(RNG &, Parameters &,
-                                const latent_choices_t &constraints) const;
-
-  template <typename RNG>
-  std::pair<int, double> assess(RNG &, Parameters &,
-                                const EmptyChoiceBuffer &constraints) const;
+  std::pair<int, float> assess(RNG &, ModelParameters &,
+                               const EmptyChoiceBuffer &constraints) const;
 };
 
-class Trace {
+class ModelTrace {
   friend class Model;
 
 private:
   Model model_;
-  double score_;
+  float score_;
   latent_choices_t latents_;
   latent_choices_t alternate_latents_;
   latent_choices_t latent_gradient_;
   bool can_be_reverted_;
-  bool gradients_computed_;
-  RetvalChange diff_;
 
 private:
-  // initialize trace without precomputed gradient
-  Trace(Model model, double score, latent_choices_t &&latents)
+  ModelTrace(Model model, float score, latent_choices_t &&latents)
       : model_{std::move(model)}, score_{score}, latents_{latents},
-        can_be_reverted_{false}, gradients_computed_{false} {}
-  // initialize trace with gradient precomputed
-  Trace(Model model, double score, latent_choices_t &&latents,
-        latent_choices_t &&latent_gradient)
-      : model_{std::move(model)}, score_{score}, latents_{latents},
-        latent_gradient_{latent_gradient}, can_be_reverted_{false},
-        gradients_computed_{true} {}
+        can_be_reverted_{false} {}
 
 public:
-  Trace() = delete;
-  Trace(const Trace &other) = delete;
-  Trace(Trace &&other) = delete;
-  Trace &operator=(const Trace &other) = delete;
-  Trace &operator=(Trace &&other) noexcept = delete;
+  ModelTrace() = delete;
+  ModelTrace(const ModelTrace &other) = delete;
+  ModelTrace(ModelTrace &&other) = delete;
+  ModelTrace &operator=(const ModelTrace &other) = delete;
+  ModelTrace &operator=(ModelTrace &&other) noexcept = delete;
 
-  [[nodiscard]] double score() const;
+  [[nodiscard]] float score() const;
   [[nodiscard]] const latent_choices_t &choices() const;
   [[nodiscard]] const latent_choices_t &
   choices(const LatentsSelection &selection) const;
   const latent_choices_t &choice_gradient(const LatentsSelection &selection);
+
   template <typename RNG>
-  double update(RNG &, const gentl::change::NoChange &,
-                const latent_choices_t &constraints,
-                const UpdateOptions &options);
+  float update(RNG &, const gentl::change::NoChange &,
+               const latent_choices_t &constraints,
+               const UpdateOptions &options);
   const latent_choices_t &backward_constraints();
 
   void revert();
@@ -157,81 +150,59 @@ public:
 // ****************************
 
 template <typename RNGType>
-std::unique_ptr<Trace> Model::simulate(RNGType &rng, Parameters &parameters,
-                                       const SimulateOptions &options) const {
+std::unique_ptr<ModelTrace>
+Model::simulate(RNGType &rng, ModelParameters &parameters,
+                const SimulateOptions &options) const {
   latent_choices_t latents;
   exact_sample(latents, rng);
   auto log_density = logpdf(latents);
-  if (options.precompute_gradient()) {
-    latent_choices_t latent_gradient;
-    logpdf_grad(latent_gradient, latents);
-    // note: this copies the model
-    return std::unique_ptr<Trace>(new Trace(
-        *this, log_density, std::move(latents), std::move(latent_gradient)));
-  } else {
-    // note: this copies the model
-    return std::unique_ptr<Trace>(
-        new Trace(*this, log_density, std::move(latents)));
-  }
+  // note: this copies the model
+  return std::unique_ptr<ModelTrace>(
+      new ModelTrace(*this, log_density, std::move(latents)));
 }
 
 template <typename RNGType>
-void Model::simulate(RNGType &rng, Parameters &parameters,
-                     const SimulateOptions &options, Trace &trace) const {
+void Model::simulate(RNGType &rng, ModelParameters &parameters,
+                     const SimulateOptions &options, ModelTrace &trace) const {
   exact_sample(trace.latents_, rng);
   trace.score_ = logpdf(trace.latents_);
-  if (options.precompute_gradient()) {
-    logpdf_grad(trace.latent_gradient_, trace.latents_);
-  }
-  trace.gradients_computed_ = options.precompute_gradient();
   trace.can_be_reverted_ = false;
 }
 
 template <typename RNGType>
-std::pair<std::unique_ptr<Trace>, double>
+std::pair<std::unique_ptr<ModelTrace>, float>
 Model::generate(const EmptyChoiceBuffer &constraints, RNGType &rng,
-                Parameters &parameters, const GenerateOptions &options) const {
+                ModelParameters &parameters,
+                const GenerateOptions &options) const {
   latent_choices_t latents;
   auto [log_density, log_weight] = importance_sample(latents, rng);
-  std::unique_ptr<Trace> trace = nullptr;
-  if (options.precompute_gradient()) {
-    latent_choices_t latent_gradient;
-    logpdf_grad(latent_gradient, latents);
-    trace = std::unique_ptr<Trace>(new Trace(
-        *this, log_density, std::move(latents), std::move(latent_gradient)));
-  } else {
-    trace = std::unique_ptr<Trace>(
-        new Trace(*this, log_density, std::move(latents)));
-  }
+  std::unique_ptr<ModelTrace> trace = nullptr;
+  trace = std::unique_ptr<ModelTrace>(
+      new ModelTrace(*this, log_density, std::move(latents)));
   return {std::move(trace), log_weight};
 }
 
 template <typename RNGType>
-double Model::generate(Trace &trace, const EmptyChoiceBuffer &constraints,
-                       RNGType &rng, Parameters &parameters,
-                       const GenerateOptions &options) const {
+float Model::generate(ModelTrace &trace, const EmptyChoiceBuffer &constraints,
+                      RNGType &rng, ModelParameters &parameters,
+                      const GenerateOptions &options) const {
   trace.model_ = *this;
   auto [log_density, log_weight] = importance_sample(trace.latents_, rng);
   trace.score_ = log_density;
-  double score = logpdf(trace.latents_);
-  if (options.precompute_gradient()) {
-    logpdf_grad(trace.latent_gradient_, trace.latents_);
-  }
-  trace.gradients_computed_ = options.precompute_gradient();
+  float score = logpdf(trace.latents_);
   trace.can_be_reverted_ = false;
   return log_weight;
 }
 
 template <typename RNG>
-std::pair<int, double>
-Model::assess(RNG &, Parameters &parameters,
-              const latent_choices_t &constraints) const {
+std::pair<int, float> Model::assess(RNG &, ModelParameters &parameters,
+                                    const latent_choices_t &constraints) const {
   return {-1, logpdf(constraints)};
 }
 
 template <typename RNG>
-std::pair<int, double>
-Model::assess(RNG &, Parameters &parameters,
+std::pair<int, float>
+Model::assess(RNG &, ModelParameters &parameters,
               const EmptyChoiceBuffer &constraints) const {
   return {-1, 0.0};
 }
@@ -240,41 +211,31 @@ Model::assess(RNG &, Parameters &parameters,
 // *** Trace implementation ***
 // ****************************
 
-double Trace::score() const { return score_; }
+float ModelTrace::score() const { return score_; }
 
 const latent_choices_t &
-Trace::choices(const LatentsSelection &selection) const {
+ModelTrace::choices(const LatentsSelection &selection) const {
   return latents_;
 }
 
-const latent_choices_t &Trace::choices() const { return latents_; }
+const latent_choices_t &ModelTrace::choices() const { return latents_; }
 
-void Trace::revert() {
+void ModelTrace::revert() {
   if (!can_be_reverted_)
     throw std::logic_error(
         "log_weight is only available between calls to update and revert");
   can_be_reverted_ = false;
   std::swap(latents_, alternate_latents_);
-  gradients_computed_ = false;
 }
 
-const latent_choices_t &Trace::backward_constraints() {
+const latent_choices_t &ModelTrace::backward_constraints() {
   return alternate_latents_;
 }
 
-const latent_choices_t &
-Trace::choice_gradient(const LatentsSelection &selection) {
-  if (!gradients_computed_) {
-    model_.logpdf_grad(latent_gradient_, latents_);
-  }
-  gradients_computed_ = true;
-  return latent_gradient_;
-}
-
 template <typename RNG>
-double Trace::update(RNG &, const gentl::change::NoChange &,
-                     const latent_choices_t &latents,
-                     const UpdateOptions &options) {
+float ModelTrace::update(RNG &, const gentl::change::NoChange &,
+                         const latent_choices_t &latents,
+                         const UpdateOptions &options) {
   if (options.save()) {
     std::swap(latents_, alternate_latents_);
     latents_ = latents; // copy assignment
@@ -283,13 +244,9 @@ double Trace::update(RNG &, const gentl::change::NoChange &,
     latents_ = latents; // copy assignment
                         // can_be_reverted_ keeps its previous value
   };
-  double new_log_density = model_.logpdf(latents_);
-  double log_weight = new_log_density - score_;
+  float new_log_density = model_.logpdf(latents_);
+  float log_weight = new_log_density - score_;
   score_ = new_log_density;
-  if (options.precompute_gradient()) {
-    model_.logpdf_grad(latent_gradient_, latents_);
-  }
-  gradients_computed_ = options.precompute_gradient();
   return log_weight;
 }
 
@@ -297,44 +254,33 @@ double Trace::update(RNG &, const gentl::change::NoChange &,
 // *** Proposal implementation ***
 // ****************************
 
-typedef double lower_bound_t;
-typedef double upper_bound_t;
-
-typedef Eigen::Array<double, 1, 1> proposal_latent_choices_t;
+typedef float proposal_latent_choices_t;
 
 class ProposalParameters {
-  double d;
-}
+public:
+  float d_;
+  ProposalParameters(float d) : d_{std::move(d)} {}
+};
+
+class ProposalTrace;
 
 class Proposal {
   typedef int return_type;
+
   friend class ProposalTrace;
 
-private:
-  lower_bound_t lower_bound;
-  upper_bound_t upper_bound;
-
 public:
+  float current;
+
   template <typename RNGType>
-  void exact_sample(latent_choices_t &model_choices, double d,
-                    proposal_latent_choices_t &latent_choices,
+  void exact_sample(float d, proposal_latent_choices_t &latents,
                     RNGType &rng) const {
-    auto current = *model_choices;
-    static std::uniform_real_distribution<double> uniform_real_dist(
-        current - d, current + d);
-    for (auto &x : latents)
-      x = uniform_real_dist(rng);
+    static std::uniform_real_distribution<float> uniform_real_dist(current - d,
+                                                                   current + d);
+    latents = uniform_real_dist(rng);
   }
 
-  [[nodiscard]] double logpdf(const proposal_latent_choices_t &latents) const {}
-
-  template <typename RNGType>
-  [[nodiscard]] std::pair<double, double>
-  importance_sample(proposal_latent_choices_t &latents, RNGType &rng) const {
-    exact_sample(latents, rng);
-    double log_weight = 0.0;
-    return {logpdf(latents), log_weight};
-  }
+  [[nodiscard]] float logpdf(const proposal_latent_choices_t &latents) const {}
 
 public:
   // simulate into a new trace object
@@ -343,15 +289,20 @@ public:
                                           ProposalParameters &parameters,
                                           const SimulateOptions &) const;
 
+  // simulate into an existing trace object (overwriting existing contents)
+  template <typename RNGType>
+  void simulate(RNGType &rng, ProposalParameters &parameters,
+                const SimulateOptions &, ProposalTrace &trace) const;
+
   // equivalent to generate but without returning a trace
   template <typename RNG>
-  std::pair<int, double>
+  std::pair<int, float>
   assess(RNG &, ProposalParameters &,
          const proposal_latent_choices_t &constraints) const;
 
   template <typename RNG>
-  std::pair<int, double> assess(RNG &, ProposalParameters &,
-                                const EmptyChoiceBuffer &constraints) const;
+  std::pair<int, float> assess(RNG &, ProposalParameters &,
+                               const EmptyChoiceBuffer &constraints) const;
 };
 
 class ProposalTrace {
@@ -359,25 +310,24 @@ class ProposalTrace {
 
 private:
   Proposal proposal_;
-  ProposalParameters parameters;
-  double score_;
-  latent_choices_t latents_;
+  ProposalParameters parameters_;
+  float score_;
+  proposal_latent_choices_t latents_;
 
 private:
-  // initialize trace without precomputed gradient
-  Trace(Proposal proposal, ProposalParameters parameters, double score,
-        proposal_latent_choices_t &&latents)
-      : proposal_{std::move(model)},
+  ProposalTrace(Proposal proposal, ProposalParameters parameters, float score,
+                proposal_latent_choices_t &&latents)
+      : proposal_{std::move(proposal)},
         parameters_{std::move(parameters)}, score_{score}, latents_{latents} {}
 
 public:
-  Trace() = delete;
-  Trace(const Trace &other) = delete;
-  Trace(Trace &&other) = delete;
-  Trace &operator=(const Trace &other) = delete;
-  Trace &operator=(Trace &&other) noexcept = delete;
+  ProposalTrace() = delete;
+  ProposalTrace(const ProposalTrace &other) = delete;
+  ProposalTrace(ProposalTrace &&other) = delete;
+  ProposalTrace &operator=(const ProposalTrace &other) = delete;
+  ProposalTrace &operator=(ProposalTrace &&other) noexcept = delete;
 
-  [[nodiscard]] double score() const;
+  [[nodiscard]] float score() const;
   [[nodiscard]] const proposal_latent_choices_t &choices() const;
   [[nodiscard]] const proposal_latent_choices_t &
   choices(const LatentsSelection &selection) const;
@@ -392,24 +342,43 @@ std::unique_ptr<ProposalTrace>
 Proposal::simulate(RNGType &rng, ProposalParameters &parameters,
                    const SimulateOptions &options) const {
   proposal_latent_choices_t latents;
-  exact_sample(latents, rng);
+  exact_sample(parameters.d_, latents, rng);
   auto log_density = logpdf(latents);
-  return std::unique_ptr<ProposalTrace>(
-      new ProposalTrace(*this, log_density, std::move(latents)));
+  return std::unique_ptr<ProposalTrace>(new ProposalTrace(
+      *this, std::move(parameters), log_density, std::move(latents)));
+}
+
+template <typename RNGType>
+void Proposal::simulate(RNGType &rng, ProposalParameters &parameters,
+                        const SimulateOptions &options,
+                        ProposalTrace &trace) const {
+  exact_sample(parameters.d_, trace.latents_, rng);
+  trace.score_ = logpdf(trace.latents_);
 }
 
 template <typename RNG>
-std::pair<int, double>
+std::pair<int, float>
 Proposal::assess(RNG &, ProposalParameters &parameters,
                  const proposal_latent_choices_t &constraints) const {
   return {-1, logpdf(constraints)};
 }
 
 template <typename RNG>
-std::pair<int, double>
+std::pair<int, float>
 Proposal::assess(RNG &, ProposalParameters &parameters,
                  const EmptyChoiceBuffer &constraints) const {
   return {-1, 0.0};
+}
+
+float ProposalTrace::score() const { return score_; }
+
+const proposal_latent_choices_t &
+ProposalTrace::choices(const LatentsSelection &selection) const {
+  return latents_;
+}
+
+const proposal_latent_choices_t &ProposalTrace::choices() const {
+  return latents_;
 }
 
 // *********************
@@ -421,125 +390,45 @@ int main(int argc, char *argv[]) {
   using std::cout;
   using std::endl;
 
-  // TODO test multiple threads
-
-  // parse arguments
-
-  static const std::string usage = "Usage: ./mcmc"
-                                   "<hmc_cycles_per_iter>"
-                                   "<mala_cycles_per_iter>"
-                                   "<mh_cycles_per_iter>"
-                                   "<hmc_leapfrog_steps>"
-                                   "<hmc_eps>"
-                                   "<mala_tau>"
-                                   "<num_threads>"
-                                   "<num_iters>"
-                                   "<seed>";
-  if (argc != 10) {
-    throw std::invalid_argument(usage);
-  }
-  size_t hmc_cycles_per_iter;
-  size_t mala_cycles_per_iter;
-  size_t mh_cycles_per_iter;
-  size_t hmc_leapfrog_steps;
-  double hmc_eps;
-  double mala_tau;
-  size_t num_threads;
-  size_t num_iters;
-  uint32_t seed;
-  try {
-    hmc_cycles_per_iter = std::atoi(argv[1]);
-    mala_cycles_per_iter = std::atoi(argv[2]);
-    mh_cycles_per_iter = std::atoi(argv[3]);
-    hmc_leapfrog_steps = std::atoi(argv[4]);
-    hmc_eps = std::atof(argv[5]);
-    mala_tau = std::atof(argv[6]);
-    num_threads = std::atoi(argv[7]);
-    num_iters = std::atoi(argv[8]);
-    seed = std::atoi(argv[9]);
-  } catch (const std::invalid_argument &e) {
-    throw std::invalid_argument(usage);
-  }
-  cerr << "hmc_cycles_per_iter: " << hmc_cycles_per_iter << endl;
-  cerr << "mala_cycles_per_iter: " << mala_cycles_per_iter << endl;
-  cerr << "mh_cycles_per_iter: " << mh_cycles_per_iter << endl;
-  cerr << "hmc_leapfrog_steps: " << hmc_leapfrog_steps << endl;
-  cerr << "hmc_eps: " << hmc_eps << endl;
-  cerr << "mala_tau: " << mala_tau << endl;
-  cerr << "num_threads: " << num_threads << endl;
-  cerr << "num_iters: " << num_iters << endl;
-  cerr << "seed: " << seed << endl;
-
   // initialize RNG
+  unsigned int seed = 314159;
   gentl::randutils::seed_seq_fe128 seed_seq{seed};
   std::mt19937 rng(seed_seq);
 
   // define the model and proposal
-  mean_t mean{0.0, 0.0};
-
-  cov_t target_covariance{{1.0, 0.95}, {0.95, 1.0}};
+  mean_t mean(0.0);
+  cov_t target_covariance(1.0);
+  ModelParameters unused{};
   Model model{mean, target_covariance};
 
-  cov_t proposal_covariance{{1.0, 0.0}, {0.0, 1.0}};
-  Model proposal{mean, proposal_covariance};
+  ProposalParameters proposal_parameters{0.25};
+  Proposal proposal{};
 
-  auto make_proposal = [&proposal](const Trace &trace) { return proposal; };
-
-  // generate initial trace and choice buffers
-  Parameters unused{};
   auto [trace, log_weight] =
-      model.generate(EmptyChoiceBuffer{}, rng, unused,
-                     GenerateOptions().precompute_gradient(true));
-  LatentsSelection hmc_selection;
-  LatentsSelection mala_selection;
-  auto proposal_trace = make_proposal(*trace).simulate(
-      rng, unused, SimulateOptions().precompute_gradient(false));
+      model.generate(EmptyChoiceBuffer{}, rng, unused, GenerateOptions());
 
-  latent_choices_t hmc_momenta_buffer{
-      trace->choices(hmc_selection)}; // copy constructor
-  latent_choices_t hmc_values_buffer{
-      trace->choices(hmc_selection)}; // copy constructor
-  latent_choices_t mala_buffer_1{
-      trace->choices(mala_selection)}; // copy constructor
-  latent_choices_t mala_buffer_2{
-      trace->choices(mala_selection)}; // copy constructor
+  auto make_proposal = [&proposal](const ModelTrace &trace) {
+    proposal.current = trace.choices();
+    return proposal;
+  };
 
-  // do some MALA and HMC on the latent variables (without allocating any memory
-  // inside the loop)
-  std::vector<mean_t> history(num_iters);
-  size_t hmc_num_accepted = 0;
-  size_t mala_num_accepted = 0;
-  size_t mh_num_accepted = 0;
-  for (size_t iter = 0; iter < num_iters; iter++) {
-    history[iter] = trace->choices(LatentsSelection{}).matrix();
-    for (size_t cycle = 0; cycle < hmc_cycles_per_iter; cycle++) {
-      hmc_num_accepted +=
-          gentl::mcmc::hmc(*trace, hmc_selection, hmc_leapfrog_steps, hmc_eps,
-                           hmc_momenta_buffer, hmc_values_buffer, rng);
+  auto proposal_trace = make_proposal(*trace).simulate(rng, proposal_parameters,
+                                                       SimulateOptions());
+
+  auto num_iters = 10;
+  auto mh_num_accepted = 0;
+
+  // Micro timing benchmarks.
+  for (size_t outer = 1; outer < 1000; outer++) {
+    auto start = high_resolution_clock::now();
+    for (size_t iter = 2; iter < num_iters; iter++) {
+      mh_num_accepted +=
+          gentl::mcmc::mh(rng, *trace, make_proposal, proposal_parameters,
+                          *proposal_trace, false);
     }
-    for (size_t cycle = 0; cycle < mala_cycles_per_iter; cycle++) {
-      mala_num_accepted += gentl::mcmc::mala(*trace, mala_selection, mala_tau,
-                                             mala_buffer_1, mala_buffer_2, rng);
-    }
-    for (size_t cycle = 0; cycle < mh_cycles_per_iter; cycle++) {
-      mh_num_accepted += gentl::mcmc::mh(rng, *trace, make_proposal, unused,
-                                         *proposal_trace, true);
-    }
+    auto stop = high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<microseconds>(stop - start);
+    cerr << "timing: " << duration.count() << endl;
   }
-
-  cerr << "hmc acceptance rate: "
-       << static_cast<double>(hmc_num_accepted) /
-              static_cast<double>(num_iters * hmc_cycles_per_iter)
-       << endl;
-  cerr << "mala acceptance rate: "
-       << static_cast<double>(mala_num_accepted) /
-              static_cast<double>(num_iters * mala_cycles_per_iter)
-       << endl;
-  cerr << "mh acceptance rate: "
-       << static_cast<double>(mh_num_accepted) /
-              static_cast<double>(num_iters * mh_cycles_per_iter)
-       << endl;
-
-  for (const auto &x : history)
-    cout << x(0) << "," << x(1) << endl;
+  return mh_num_accepted;
 }
