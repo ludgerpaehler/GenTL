@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+#include <fstream>
+#include <sstream>
 
 using namespace std::chrono;
 
@@ -424,6 +426,9 @@ int main(int argc, char *argv[]) {
 
   auto num_iters = 10;
   auto mh_num_accepted = 0;
+      
+  std::ofstream timings("timings.csv",
+                                std::ofstream::out);
 
   // Micro timing benchmarks.
   for (size_t outer = 1; outer < 1000; outer++) {
@@ -435,7 +440,8 @@ int main(int argc, char *argv[]) {
     }
     auto stop = high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<nanoseconds>(stop - start);
-    cerr << duration.count() << endl;
+    timings << duration.count() << "," << endl;
+
   }
   return mh_num_accepted;
 }
