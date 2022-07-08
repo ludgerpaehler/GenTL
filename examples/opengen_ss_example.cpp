@@ -58,9 +58,14 @@ public:
   void exact_sample(latent_choices_t &latents, RNGType &rng) const {
     static std::normal_distribution<float> standard_normal_dist(0.0, 1.0);
     latents = standard_normal_dist(rng);
+    return;
   }
 
-  [[nodiscard]] float logpdf(const latent_choices_t &latents) const {}
+  [[nodiscard]] float logpdf(const latent_choices_t &latents) const {
+    static float logSqrt2Pi = 0.5 * std::log(2 * M_PI);
+    auto w = -0.5 * (latents * latents) - logSqrt2Pi;
+    return w;
+  }
 
   template <typename RNGType>
   [[nodiscard]] std::pair<float, float>
@@ -280,7 +285,9 @@ public:
     latents = uniform_real_dist(rng);
   }
 
-  [[nodiscard]] float logpdf(const proposal_latent_choices_t &latents) const {}
+  [[nodiscard]] float logpdf(const ProposalParameters &parameters, const proposal_latent_choices_t &latents) const {
+      return 1 / (2.0 * parameters.d_);
+  }
 
 public:
   // simulate into a new trace object
@@ -343,7 +350,7 @@ Proposal::simulate(RNGType &rng, ProposalParameters &parameters,
                    const SimulateOptions &options) const {
   proposal_latent_choices_t latents;
   exact_sample(parameters.d_, latents, rng);
-  auto log_density = logpdf(latents);
+  auto log_density = logpdf(parameters.d_, latents);
   return std::unique_ptr<ProposalTrace>(new ProposalTrace(
       *this, std::move(parameters), log_density, std::move(latents)));
 }
@@ -353,14 +360,14 @@ void Proposal::simulate(RNGType &rng, ProposalParameters &parameters,
                         const SimulateOptions &options,
                         ProposalTrace &trace) const {
   exact_sample(parameters.d_, trace.latents_, rng);
-  trace.score_ = logpdf(trace.latents_);
+  trace.score_ = logpdf(parameters.d_, trace.latents_);
 }
 
 template <typename RNG>
 std::pair<int, float>
 Proposal::assess(RNG &, ProposalParameters &parameters,
                  const proposal_latent_choices_t &constraints) const {
-  return {-1, logpdf(constraints)};
+  return {-1, logpdf(parameters.d_, constraints)};
 }
 
 template <typename RNG>
@@ -427,8 +434,8 @@ int main(int argc, char *argv[]) {
                           *proposal_trace, false);
     }
     auto stop = high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<microseconds>(stop - start);
-    cerr << "timing: " << duration.count() << endl;
+    auto duration = std::chrono::duration_cast<nanoseconds>(stop - start);
+    cerr << duration.count() << endl;
   }
   return mh_num_accepted;
 }
