@@ -424,14 +424,14 @@ int main(int argc, char *argv[]) {
   auto proposal_trace = make_proposal(*trace).simulate(rng, proposal_parameters,
                                                        SimulateOptions());
 
-  auto num_iters = 10;
+  auto num_iters = 3;
   auto mh_num_accepted = 0;
       
   std::ofstream timings("timings.csv",
                                 std::ofstream::out);
 
   // Micro timing benchmarks.
-  for (size_t outer = 1; outer < 1000; outer++) {
+  for (size_t outer = 1; outer < 50000; outer++) {
     auto start = high_resolution_clock::now();
     for (size_t iter = 2; iter < num_iters; iter++) {
       mh_num_accepted +=
