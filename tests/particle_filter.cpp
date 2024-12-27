@@ -18,7 +18,9 @@ See the License for the specific language governing permissions and
 #include <catch2/catch.hpp>
 
 #include <iostream>
-#include <Eigen/Dense>
+#include <valarray>
+
+#include "../third_party/Eigen/Dense"
 
 #include <gentl/types.h>
 #include <gentl/util/randutils.h>

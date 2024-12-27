@@ -20,7 +20,8 @@ add_executable(testlib
 target_compile_features(testlib PRIVATE cxx_std_17)
 
 target_include_directories(testlib PRIVATE ../include)
-target_include_directories(testlib PRIVATE ../third_party/Eigen)
+#target_include_directories(testlib PRIVATE ../third_party/Eigen)
+#target_include_directories(testlib PRIVATE /opt/homebrew/include/eigen3)
 
 # Should be linked to the main library, as well as the Catch2 testing library
 target_link_libraries(testlib PRIVATE Catch2::Catch2 Threads::Threads)

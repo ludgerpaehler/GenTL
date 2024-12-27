@@ -20,6 +20,7 @@ See the License for the specific language governing permissions and
 #include <vector>
 #include <utility>
 #include <random>
+#include <thread>
 #include <barrier> // NOTE: requires C++20 or c++17 with experimental (consider using boost version or re-implementing)
 
 #include <gentl/util/chunks.h>

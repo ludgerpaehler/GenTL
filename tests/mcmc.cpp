@@ -22,7 +22,7 @@ See the License for the specific language governing permissions and
 #include <utility>
 #include <vector>
 
-#include <Eigen/Dense>
+#include "../third_party/Eigen/Dense"
 
 #include <gentl/inference/mcmc.h>
 #include <gentl/types.h>

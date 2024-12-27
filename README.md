@@ -41,9 +41,16 @@ cmake --build --target docs
 ```
 Note that there is a Github Action that generates and deploys documentation to https://github.com/OpenGen/gentl-docs/ when there is a `push` to the `main` branch of this repository.
 
-
 ## References
 
-Gen: A General-Purpose Probabilistic Programming System with Programmable Inference. Cusumano-Towner, M. F.; Saad, F. A.; Lew, A.; and Mansinghka, V. K. In Proceedings of the 40th ACM SIGPLAN Conference on Programming Language Design and Implementation (PLDI ‘19). ([pdf](https://dl.acm.org/doi/10.1145/3314221.3314642)) ([bibtex](assets/gen-pldi.txt))
+```bibtex
+@inproceedings{cusumano2019gen,
+  title={Gen: a general-purpose probabilistic programming system with programmable inference},
+  author={Cusumano-Towner, Marco F and Saad, Feras A and Lew, Alexander K and Mansinghka, Vikash K},
+  booktitle={Proceedings of the 40th acm sigplan conference on programming language design and implementation},
+  pages={221--236},
+  year={2019}
+}
+```
 
 Marco Cusumano-Towner's [PhD thesis](https://www.mct.dev).
