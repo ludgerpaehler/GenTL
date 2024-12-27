@@ -11,7 +11,7 @@
 
 // Resolve import, need to either link in the homebrew includes through
 // cmake or creating a symlink on the system. Cmake should be preferable.
-#include <eigen3/Eigen/Dense>
+#include "../third_party/Eigen/Dense"
 
 // TODO support parameters
 // TODO support subset of addresses
