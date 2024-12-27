@@ -19,7 +19,8 @@ See the License for the specific language governing permissions and
 #include <gentl/modeling/sequence.h>
 #include <gentl/inference/particle_filter.h>
 #include <iostream>
-#include <Eigen/Dense>
+
+#include "../third_party/Eigen/Dense"
 
 using Eigen::VectorXd;
 using Eigen::MatrixXd;
